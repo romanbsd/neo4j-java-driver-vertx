@@ -16,6 +16,8 @@
 package org.neo4j.driver.vertx;
 
 import io.vertx.core.Vertx;
+import org.jetbrains.annotations.NotNull;
+
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -54,7 +56,7 @@ final class VertxScheduledExecutorService extends AbstractExecutorService implem
     }
 
     @Override
-    public List<Runnable> shutdownNow() {
+    public @NotNull List<Runnable> shutdownNow() {
         shutdown.set(true);
         List<VertxScheduledTask<?>> currentTasks;
         synchronized (monitor) {
@@ -94,7 +96,7 @@ final class VertxScheduledExecutorService extends AbstractExecutorService implem
     }
 
     @Override
-    public void execute(Runnable command) {
+    public void execute(@NotNull Runnable command) {
         rejectIfShutdown();
         inflightCount.incrementAndGet();
         vertx.runOnContext(ignored -> {
@@ -111,7 +113,7 @@ final class VertxScheduledExecutorService extends AbstractExecutorService implem
     }
 
     @Override
-    public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+    public @NotNull ScheduledFuture<?> schedule(@NotNull Runnable command, long delay, TimeUnit unit) {
         rejectIfShutdown();
         var task = add(new VertxScheduledTask<>(unit.toNanos(delay), command, false));
         var timerId = vertx.setTimer(Math.max(0, unit.toMillis(delay)), id -> task.runOnce());
@@ -120,7 +122,7 @@ final class VertxScheduledExecutorService extends AbstractExecutorService implem
     }
 
     @Override
-    public <V> ScheduledFuture<V> schedule(Callable<V> callable, long delay, TimeUnit unit) {
+    public <V> @NotNull ScheduledFuture<V> schedule(@NotNull Callable<V> callable, long delay, TimeUnit unit) {
         rejectIfShutdown();
         var task = add(new VertxScheduledTask<>(unit.toNanos(delay), callable, false));
         var timerId = vertx.setTimer(Math.max(0, unit.toMillis(delay)), id -> task.runOnce());
@@ -129,7 +131,7 @@ final class VertxScheduledExecutorService extends AbstractExecutorService implem
     }
 
     @Override
-    public ScheduledFuture<?> scheduleAtFixedRate(Runnable command, long initialDelay, long period, TimeUnit unit) {
+    public @NotNull ScheduledFuture<?> scheduleAtFixedRate(@NotNull Runnable command, long initialDelay, long period, TimeUnit unit) {
         rejectIfShutdown();
         var task = add(new VertxScheduledTask<>(unit.toNanos(initialDelay), command, true));
         var timerId = vertx.setPeriodic(Math.max(0, unit.toMillis(initialDelay)), Math.max(1, unit.toMillis(period)), id -> {
@@ -143,7 +145,7 @@ final class VertxScheduledExecutorService extends AbstractExecutorService implem
     }
 
     @Override
-    public ScheduledFuture<?> scheduleWithFixedDelay(Runnable command, long initialDelay, long delay, TimeUnit unit) {
+    public @NotNull ScheduledFuture<?> scheduleWithFixedDelay(@NotNull Runnable command, long initialDelay, long delay, TimeUnit unit) {
         rejectIfShutdown();
         var delayMillis = Math.max(1, unit.toMillis(delay));
         var task = add(new VertxScheduledTask<>(unit.toNanos(initialDelay), command, true));
@@ -152,15 +154,13 @@ final class VertxScheduledExecutorService extends AbstractExecutorService implem
     }
 
     private void scheduleFixedDelay(VertxScheduledTask<?> task, long currentDelayMillis, long nextDelayMillis) {
-        var timerId = vertx.setTimer(currentDelayMillis, id -> {
-            task.runFixedDelay(() -> {
-                if (shutdown.get() || task.isCancelled()) {
-                    task.complete();
-                } else {
-                    scheduleFixedDelay(task, nextDelayMillis, nextDelayMillis);
-                }
-            });
-        });
+        var timerId = vertx.setTimer(currentDelayMillis, id -> task.runFixedDelay(() -> {
+            if (shutdown.get() || task.isCancelled()) {
+                task.complete();
+            } else {
+                scheduleFixedDelay(task, nextDelayMillis, nextDelayMillis);
+            }
+        }));
         task.timerId(timerId);
     }
 
@@ -318,13 +318,11 @@ final class VertxScheduledExecutorService extends AbstractExecutorService implem
             return cancel();
         }
 
-        synchronized boolean complete() {
+        synchronized void complete() {
             if (done.compareAndSet(false, true)) {
                 remove(this);
                 completion.countDown();
-                return true;
             }
-            return false;
         }
 
         @Override
@@ -344,7 +342,7 @@ final class VertxScheduledExecutorService extends AbstractExecutorService implem
         }
 
         @Override
-        public V get(long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException {
+        public V get(long timeout, @NotNull TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException {
             if (!completion.await(timeout, unit)) {
                 throw new TimeoutException();
             }

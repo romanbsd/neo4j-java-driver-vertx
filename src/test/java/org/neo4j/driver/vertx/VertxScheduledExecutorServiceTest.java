@@ -180,6 +180,7 @@ class VertxScheduledExecutorServiceTest {
 
     private static void await(CountDownLatch latch) {
         try {
+            //noinspection ResultOfMethodCallIgnored
             latch.await(1, SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
