@@ -1,5 +1,8 @@
 # Neo4j Java Driver Vert.x
 
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.romanbsd/neo4j-java-driver-vertx.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.romanbsd/neo4j-java-driver-vertx)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 Vert.x `Future` API wrapper for the Neo4j Java Driver.
 
 This package reuses the official Neo4j Java Driver for protocol, routing, authentication, value mapping, and retry behavior, while adapting the public async surface to Vert.x `Future` and using a Vert.x-backed scheduler for driver timers.
@@ -8,16 +11,24 @@ This package reuses the official Neo4j Java Driver for protocol, routing, authen
 
 - Java 17+
 - Vert.x 5.x
-- Neo4j Java Driver 6.0.x
+- Neo4j Java Driver 6.1.x
 
-## Maven
+## Installation
+
+### Maven
 
 ```xml
 <dependency>
   <groupId>io.github.romanbsd</groupId>
   <artifactId>neo4j-java-driver-vertx</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>0.1.0</version>
 </dependency>
+```
+
+### Gradle
+
+```gradle
+implementation 'io.github.romanbsd:neo4j-java-driver-vertx:0.1.0'
 ```
 
 The package declares its Neo4j Java Driver and Vert.x dependencies directly. If you need to align versions with your application, override the dependency versions in your own dependency management.
@@ -91,3 +102,7 @@ session.closeFuture()
 - The official Neo4j Java Driver remains the source of truth for Bolt protocol behavior.
 - This package focuses on Vert.x `Future` adaptation, Vert.x context dispatch, and Vert.x-backed scheduling.
 - Constructing the driver inside a Vert.x context is recommended. Operations invoked inside a Vert.x context complete on that caller context; operations invoked outside a context use the driver's fallback context.
+
+## License
+
+This project is licensed under the [Apache License, Version 2.0](LICENSE).
