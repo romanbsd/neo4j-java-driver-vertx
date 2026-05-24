@@ -26,7 +26,6 @@ import org.neo4j.driver.AuthTokens;
 import org.neo4j.driver.ClientCertificateManager;
 import org.neo4j.driver.Config;
 import org.neo4j.driver.Driver;
-import org.neo4j.driver.internal.DriverFactory;
 import org.neo4j.driver.internal.ValidatingClientCertificateManager;
 import org.neo4j.driver.internal.security.StaticAuthTokenManager;
 import org.neo4j.driver.internal.security.ValidatingAuthTokenManager;
@@ -246,7 +245,7 @@ public final class VertxGraphDatabase {
         if (clientCertificateManager != null) {
             clientCertificateManager = new ValidatingClientCertificateManager(clientCertificateManager);
         }
-        var driver = new DriverFactory()
+        var driver = new VertxDriverFactory()
                 .newInstance(
                         uri,
                         authTokenManager,

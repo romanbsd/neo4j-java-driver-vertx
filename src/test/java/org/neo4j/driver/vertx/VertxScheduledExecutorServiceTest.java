@@ -26,11 +26,13 @@ import static org.hamcrest.Matchers.sameInstance;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.vertx.core.Vertx;
+import io.vertx.core.impl.VertxThread;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RunnableScheduledFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -80,6 +82,52 @@ class VertxScheduledExecutorServiceTest {
     }
 
     @Test
+    void executeRunsTaskOffEventLoopThread() throws Exception {
+        var runsOnWorkerThread = new AtomicReference<Boolean>();
+        var latch = new CountDownLatch(1);
+
+        executor.execute(() -> {
+            runsOnWorkerThread.set(runsOnWorkerThread());
+            latch.countDown();
+        });
+
+        assertThat(latch.await(1, SECONDS), is(true));
+        assertThat(runsOnWorkerThread.get(), is(true));
+    }
+
+    @Test
+    void executeReportsTaskFailureToVertxExceptionHandler() throws Exception {
+        var failure = new AtomicReference<Throwable>();
+        var latch = new CountDownLatch(1);
+        vertx.exceptionHandler(throwable -> {
+            failure.set(throwable);
+            latch.countDown();
+        });
+
+        var expected = new RuntimeException("boom");
+        executor.execute(() -> {
+            throw expected;
+        });
+
+        assertThat(latch.await(1, SECONDS), is(true));
+        assertThat(failure.get(), is(expected));
+    }
+
+    @Test
+    void scheduledTaskRunsOffEventLoopThread() throws Exception {
+        var future = executor.schedule(VertxScheduledExecutorServiceTest::runsOnWorkerThread, 1, MILLISECONDS);
+
+        assertThat(future.get(1, SECONDS), is(true));
+    }
+
+    @Test
+    void zeroDelayTaskRunsWithoutVertxTimer() throws Exception {
+        var future = executor.schedule(() -> "done", 0, MILLISECONDS);
+
+        assertThat(future.get(1, SECONDS), is("done"));
+    }
+
+    @Test
     void scheduleWithFixedDelayMeasuresDelayAfterPreviousRunCompletes() throws Exception {
         var runCount = new AtomicInteger();
         var firstEndNanos = new AtomicLong();
@@ -112,6 +160,28 @@ class VertxScheduledExecutorServiceTest {
         var future = executor.scheduleAtFixedRate(() -> {}, 1, 10, MILLISECONDS);
 
         assertThat(((RunnableScheduledFuture<?>) future).isPeriodic(), is(true));
+        future.cancel(false);
+    }
+
+    @Test
+    void fixedRateTaskContinuesAfterRunExceedsPeriod() throws Exception {
+        var runCount = new AtomicInteger();
+        var thirdRun = new CountDownLatch(1);
+
+        var future = executor.scheduleAtFixedRate(
+                () -> {
+                    if (runCount.incrementAndGet() == 1) {
+                        sleep(120);
+                    }
+                    if (runCount.get() >= 3) {
+                        thirdRun.countDown();
+                    }
+                },
+                1,
+                30,
+                MILLISECONDS);
+
+        assertThat(thirdRun.await(1, SECONDS), is(true));
         future.cancel(false);
     }
 
@@ -185,5 +255,9 @@ class VertxScheduledExecutorServiceTest {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    private static boolean runsOnWorkerThread() {
+        return Thread.currentThread() instanceof VertxThread vertxThread && vertxThread.isWorker();
     }
 }

@@ -35,7 +35,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 final class VertxScheduledExecutorService extends AbstractExecutorService implements ScheduledExecutorService {
     private final Vertx vertx;
@@ -99,14 +98,30 @@ final class VertxScheduledExecutorService extends AbstractExecutorService implem
     public void execute(@NotNull Runnable command) {
         rejectIfShutdown();
         inflightCount.incrementAndGet();
-        vertx.runOnContext(ignored -> {
+        vertx.executeBlocking(() -> {
+            command.run();
+            return null;
+        }, false).onComplete(ignored -> {
+            if (ignored.failed()) {
+                reportFailure(ignored.cause());
+            }
+            if (inflightCount.decrementAndGet() == 0) {
+                signalTermination();
+            }
+        });
+    }
+
+    private <V> void executeBlocking(VertxScheduledTask<V> task, Callable<V> callable, BlockingResultHandler<V> handler) {
+        vertx.executeBlocking(callable, false).onComplete(result -> {
             try {
-                command.run();
+                if (result.succeeded()) {
+                    handler.handleResult(result.result());
+                } else {
+                    handler.handleFailure(result.cause());
+                }
             } finally {
-                if (inflightCount.decrementAndGet() == 0) {
-                    synchronized (monitor) {
-                        monitor.notifyAll();
-                    }
+                if (task.isDone()) {
+                    signalTermination();
                 }
             }
         });
@@ -116,8 +131,7 @@ final class VertxScheduledExecutorService extends AbstractExecutorService implem
     public @NotNull ScheduledFuture<?> schedule(@NotNull Runnable command, long delay, TimeUnit unit) {
         rejectIfShutdown();
         var task = add(new VertxScheduledTask<>(unit.toNanos(delay), command, false));
-        var timerId = vertx.setTimer(Math.max(0, unit.toMillis(delay)), id -> task.runOnce());
-        task.timerId(timerId);
+        scheduleTimer(task, unit.toNanos(delay), task::runOnce);
         return task;
     }
 
@@ -125,43 +139,79 @@ final class VertxScheduledExecutorService extends AbstractExecutorService implem
     public <V> @NotNull ScheduledFuture<V> schedule(@NotNull Callable<V> callable, long delay, TimeUnit unit) {
         rejectIfShutdown();
         var task = add(new VertxScheduledTask<>(unit.toNanos(delay), callable, false));
-        var timerId = vertx.setTimer(Math.max(0, unit.toMillis(delay)), id -> task.runOnce());
-        task.timerId(timerId);
+        scheduleTimer(task, unit.toNanos(delay), task::runOnce);
         return task;
     }
 
     @Override
-    public @NotNull ScheduledFuture<?> scheduleAtFixedRate(@NotNull Runnable command, long initialDelay, long period, TimeUnit unit) {
+    public @NotNull ScheduledFuture<?> scheduleAtFixedRate(@NotNull Runnable command, long initialDelay, long period, @NotNull TimeUnit unit) {
+        if (period <= 0) {
+            throw new IllegalArgumentException("period must be greater than zero");
+        }
         rejectIfShutdown();
         var task = add(new VertxScheduledTask<>(unit.toNanos(initialDelay), command, true));
-        var timerId = vertx.setPeriodic(Math.max(0, unit.toMillis(initialDelay)), Math.max(1, unit.toMillis(period)), id -> {
-            task.runPeriodic();
-            if (task.isDone()) {
-                vertx.cancelTimer(id);
-            }
-        });
-        task.timerId(timerId);
+        scheduleFixedRate(task, System.nanoTime() + Math.max(0, unit.toNanos(initialDelay)), unit.toNanos(period));
         return task;
     }
 
     @Override
-    public @NotNull ScheduledFuture<?> scheduleWithFixedDelay(@NotNull Runnable command, long initialDelay, long delay, TimeUnit unit) {
+    public @NotNull ScheduledFuture<?> scheduleWithFixedDelay(@NotNull Runnable command, long initialDelay, long delay, @NotNull TimeUnit unit) {
+        if (delay <= 0) {
+            throw new IllegalArgumentException("delay must be greater than zero");
+        }
         rejectIfShutdown();
-        var delayMillis = Math.max(1, unit.toMillis(delay));
         var task = add(new VertxScheduledTask<>(unit.toNanos(initialDelay), command, true));
-        scheduleFixedDelay(task, Math.max(0, unit.toMillis(initialDelay)), delayMillis);
+        scheduleFixedDelay(task, Math.max(0, unit.toNanos(initialDelay)), unit.toNanos(delay));
         return task;
     }
 
-    private void scheduleFixedDelay(VertxScheduledTask<?> task, long currentDelayMillis, long nextDelayMillis) {
-        var timerId = vertx.setTimer(currentDelayMillis, id -> task.runFixedDelay(() -> {
+    private void scheduleFixedRate(VertxScheduledTask<?> task, long scheduledNanos, long periodNanos) {
+        scheduleTimer(task, scheduledNanos - System.nanoTime(), () -> task.runPeriodic(() -> {
             if (shutdown.get() || task.isCancelled()) {
                 task.complete();
             } else {
-                scheduleFixedDelay(task, nextDelayMillis, nextDelayMillis);
+                scheduleFixedRate(task, scheduledNanos + periodNanos, periodNanos);
             }
         }));
-        task.timerId(timerId);
+    }
+
+    private void scheduleFixedDelay(VertxScheduledTask<?> task, long currentDelayNanos, long nextDelayNanos) {
+        scheduleTimer(task, currentDelayNanos, () -> task.runFixedDelay(() -> {
+            if (shutdown.get() || task.isCancelled()) {
+                task.complete();
+            } else {
+                scheduleFixedDelay(task, nextDelayNanos, nextDelayNanos);
+            }
+        }));
+    }
+
+    private static long toTimerDelayMillis(long delayNanos) {
+        if (delayNanos <= 0) {
+            return 0;
+        }
+        return Math.max(1, TimeUnit.NANOSECONDS.toMillis(delayNanos));
+    }
+
+    private void scheduleTimer(VertxScheduledTask<?> task, long delayNanos, Runnable action) {
+        var delayMillis = toTimerDelayMillis(delayNanos);
+        if (delayMillis == 0) {
+            vertx.runOnContext(ignored -> action.run());
+        } else {
+            var timerId = vertx.setTimer(delayMillis, ignored -> action.run());
+            task.timerId(timerId);
+        }
+    }
+
+    private void reportFailure(Throwable throwable) {
+        vertx.runOnContext(ignored -> {
+            if (throwable instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            if (throwable instanceof Error error) {
+                throw error;
+            }
+            throw new RuntimeException(throwable);
+        });
     }
 
     private <V> VertxScheduledTask<V> add(VertxScheduledTask<V> task) {
@@ -198,14 +248,14 @@ final class VertxScheduledExecutorService extends AbstractExecutorService implem
         private final long createdNanos = System.nanoTime();
         private final long delayNanos;
         private final Callable<V> callable;
-        private final AtomicLong timerId = new AtomicLong(-1);
-        private final AtomicBoolean running = new AtomicBoolean();
         private final AtomicBoolean done = new AtomicBoolean();
         private final CountDownLatch completion = new CountDownLatch(1);
         private final boolean periodic;
         private volatile V value;
         private volatile Throwable failure;
         private volatile boolean cancelled;
+        private boolean running;
+        private long timerId = -1;
 
         VertxScheduledTask(long delayNanos, Runnable runnable, boolean periodic) {
             this(delayNanos, () -> {
@@ -220,54 +270,47 @@ final class VertxScheduledExecutorService extends AbstractExecutorService implem
             this.periodic = periodic;
         }
 
-        void timerId(long timerId) {
-            this.timerId.set(timerId);
-            if (cancelled) {
+        synchronized void timerId(long timerId) {
+            this.timerId = timerId;
+            if (cancelled || done.get()) {
                 vertx.cancelTimer(timerId);
             }
         }
 
         void runOnce() {
-            if (cancelled || done.get()) {
-                complete();
+            if (!startRun()) {
                 return;
             }
-            if (!running.compareAndSet(false, true)) {
-                return;
-            }
-            try {
-                value = callable.call();
-            } catch (Throwable throwable) {
-                failure = throwable;
-            } finally {
-                synchronized (this) {
-                    running.set(false);
-                    complete();
+            executeBlocking(this, callable, new BlockingResultHandler<>() {
+                @Override
+                public void handleResult(V result) {
+                    synchronized (VertxScheduledTask.this) {
+                        value = result;
+                        running = false;
+                        complete();
+                    }
                 }
-            }
+
+                @Override
+                public void handleFailure(Throwable throwable) {
+                    synchronized (VertxScheduledTask.this) {
+                        failure = throwable;
+                        running = false;
+                        complete();
+                    }
+                }
+            });
         }
 
-        void runPeriodic() {
+        void runPeriodic(Runnable next) {
             if (cancelled || shutdown.get() || done.get()) {
                 complete();
                 return;
             }
-            if (!running.compareAndSet(false, true)) {
+            if (!startRun()) {
                 return;
             }
-            try {
-                callable.call();
-            } catch (Throwable throwable) {
-                failure = throwable;
-                complete();
-            } finally {
-                synchronized (this) {
-                    running.set(false);
-                    if (cancelled || shutdown.get()) {
-                        complete();
-                    }
-                }
-            }
+            executeBlocking(this, callable, nextHandler(next));
         }
 
         void runFixedDelay(Runnable next) {
@@ -275,26 +318,87 @@ final class VertxScheduledExecutorService extends AbstractExecutorService implem
                 complete();
                 return;
             }
-            if (!running.compareAndSet(false, true)) {
+            if (!startRun()) {
                 return;
             }
-            try {
-                callable.call();
-            } catch (Throwable throwable) {
-                failure = throwable;
-            } finally {
-                boolean shouldContinue;
-                synchronized (this) {
-                    running.set(false);
-                    shouldContinue = failure == null && !cancelled && !shutdown.get();
-                    if (!shouldContinue) {
-                        complete();
+            executeBlocking(this, callable, nextHandler(next));
+        }
+
+        private synchronized boolean startRun() {
+            if (cancelled || done.get()) {
+                complete();
+                return false;
+            }
+            if (running) {
+                return false;
+            }
+            running = true;
+            return true;
+        }
+
+        private BlockingResultHandler<V> nextHandler(Runnable next) {
+            return new BlockingResultHandler<>() {
+                @Override
+                public void handleResult(V ignored) {
+                    finishPeriodic(null, next);
+                }
+
+                @Override
+                public void handleFailure(Throwable throwable) {
+                    finishPeriodic(throwable, next);
+                }
+
+                private void finishPeriodic(Throwable throwable, Runnable next) {
+                    boolean shouldContinue;
+                    synchronized (VertxScheduledTask.this) {
+                        if (throwable != null) {
+                            failure = throwable;
+                        }
+                        running = false;
+                        shouldContinue = failure == null && !cancelled && !shutdown.get();
+                        if (!shouldContinue) {
+                            complete();
+                        }
+                    }
+                    if (shouldContinue) {
+                        next.run();
                     }
                 }
-                if (shouldContinue) {
-                    next.run();
+            };
+        }
+
+        synchronized void complete() {
+            if (done.compareAndSet(false, true)) {
+                if (timerId >= 0) {
+                    vertx.cancelTimer(timerId);
                 }
+                remove(this);
+                completion.countDown();
             }
+        }
+
+        private synchronized boolean cancel() {
+            if (done.get()) {
+                return false;
+            }
+            cancelled = true;
+            if (timerId >= 0) {
+                vertx.cancelTimer(timerId);
+            }
+            if (!running) {
+                complete();
+            }
+            return true;
+        }
+
+        private V resolve() throws ExecutionException {
+            if (cancelled) {
+                throw new CancellationException();
+            }
+            if (failure != null) {
+                throw new ExecutionException(failure);
+            }
+            return value;
         }
 
         @Override
@@ -316,13 +420,6 @@ final class VertxScheduledExecutorService extends AbstractExecutorService implem
         @Override
         public boolean cancel(boolean mayInterruptIfRunning) {
             return cancel();
-        }
-
-        synchronized void complete() {
-            if (done.compareAndSet(false, true)) {
-                remove(this);
-                completion.countDown();
-            }
         }
 
         @Override
@@ -353,30 +450,11 @@ final class VertxScheduledExecutorService extends AbstractExecutorService implem
         public void run() {
             runOnce();
         }
+    }
 
-        private synchronized boolean cancel() {
-            if (done.get()) {
-                return false;
-            }
-            cancelled = true;
-            var id = timerId.get();
-            if (id >= 0) {
-                vertx.cancelTimer(id);
-            }
-            if (!running.get()) {
-                complete();
-            }
-            return true;
-        }
+    private interface BlockingResultHandler<V> {
+        void handleResult(V result);
 
-        private V resolve() throws ExecutionException {
-            if (cancelled) {
-                throw new CancellationException();
-            }
-            if (failure != null) {
-                throw new ExecutionException(failure);
-            }
-            return value;
-        }
+        void handleFailure(Throwable throwable);
     }
 }
