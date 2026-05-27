@@ -5,7 +5,7 @@
 
   <groupId>io.github.romanbsd</groupId>
   <artifactId>neo4j-java-driver-vertx</artifactId>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
 
   <packaging>jar</packaging>
   <name>Neo4j Java Driver Vert.x</name>
