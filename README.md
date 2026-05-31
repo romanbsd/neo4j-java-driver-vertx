@@ -21,14 +21,14 @@ This package reuses the official Neo4j Java Driver for protocol, routing, authen
 <dependency>
   <groupId>io.github.romanbsd</groupId>
   <artifactId>neo4j-java-driver-vertx</artifactId>
-  <version>0.1.0</version>
+  <version>0.3.0</version>
 </dependency>
 ```
 
 ### Gradle
 
 ```gradle
-implementation 'io.github.romanbsd:neo4j-java-driver-vertx:0.1.0'
+implementation 'io.github.romanbsd:neo4j-java-driver-vertx:0.3.0'
 ```
 
 The package declares its Neo4j Java Driver and Vert.x dependencies directly. If you need to align versions with your application, override the dependency versions in your own dependency management.
