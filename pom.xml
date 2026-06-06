@@ -38,7 +38,7 @@
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <maven.compiler.release>17</maven.compiler.release>
     <neo4j-java-driver.version>6.1.0</neo4j-java-driver.version>
-    <vertx.version>5.0.12</vertx.version>
+    <vertx.version>5.1.1</vertx.version>
     <junit.version>6.1.0</junit.version>
     <mockito-core.version>5.23.0</mockito-core.version>
     <hamcrest.version>3.0</hamcrest.version>
