@@ -39,7 +39,7 @@
     <maven.compiler.release>17</maven.compiler.release>
     <neo4j-java-driver.version>6.2.1</neo4j-java-driver.version>
     <vertx.version>5.1.5</vertx.version>
-    <junit.version>6.1.0</junit.version>
+    <junit.version>6.1.2</junit.version>
     <mockito-core.version>5.23.0</mockito-core.version>
     <hamcrest.version>3.0</hamcrest.version>
     <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
